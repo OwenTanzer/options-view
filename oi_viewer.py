@@ -12,13 +12,14 @@ Usage:
 """
 
 import calendar as _cal
-import glob
+import io
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pandas_market_calendars as mcal
+import requests
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -34,12 +35,10 @@ from utils import (
     _ensure_calendar_loaded, nominal_friday, prior_trading_day, target_expirations,
 )
 
-# ── project paths ──────────────────────────────────────────────────────────────
+# ── paths and remote data ──────────────────────────────────────────────────────
 
-ROOT       = Path(__file__).parent
-RAW_DIR    = ROOT / "data" / "raw"
-OPEX_DIR   = RAW_DIR / "opex"
-DERIVE_DIR = ROOT / "data" / "derived"
+ROOT    = Path(__file__).parent   # still used for icon.png
+R2_BASE = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev"
 
 # ── display config ─────────────────────────────────────────────────────────────
 
@@ -124,38 +123,24 @@ def classify_tier(trade_date: date) -> str:
 # ── data helpers ───────────────────────────────────────────────────────────────
 
 def available_dates() -> set[date]:
-    out = set()
-    for f in glob.glob(str(RAW_DIR / "*.csv")) + glob.glob(str(OPEX_DIR / "*.csv")):
-        try:
-            out.add(datetime.strptime(Path(f).stem.split("_")[-1], "%Y%m%d").date())
-        except ValueError:
-            pass
-    return out
+    resp = requests.get(f"{R2_BASE}/manifest.json", timeout=10)
+    resp.raise_for_status()
+    return {date.fromisoformat(d) for d in resp.json()["dates"]}
 
 
 def load_day(d: date) -> pd.DataFrame | None:
     fname = f"qqq_chain_{d.strftime('%Y%m%d')}.csv"
-    for dr in [RAW_DIR, OPEX_DIR]:
-        p = dr / fname
-        if p.exists():
-            return pd.read_csv(p)
+    for key in [f"raw/{fname}", f"raw/opex/{fname}"]:
+        resp = requests.get(f"{R2_BASE}/{key}", timeout=15)
+        if resp.status_code == 200:
+            return pd.read_csv(io.StringIO(resp.text))
     return None
 
 
 def load_ranges() -> pd.DataFrame:
-    candidates = []
-    for name in ("OIranges.csv", "OIranges_new.csv"):
-        p = DERIVE_DIR / name
-        if p.exists():
-            candidates.append(pd.read_csv(p))
-    for df in candidates:
-        if "0DTE_Regular" in df["Tier"].values:
-            return df
-    if candidates:
-        return candidates[0]
-    raise FileNotFoundError(
-        "OIranges.csv not found — run: python historical/compute_oi_ranges.py"
-    )
+    resp = requests.get(f"{R2_BASE}/derived/OIranges.csv", timeout=15)
+    resp.raise_for_status()
+    return pd.read_csv(io.StringIO(resp.text))
 
 
 def effective_thresholds(tier: str, ranges: pd.DataFrame, offsets: list[int]) -> dict:
