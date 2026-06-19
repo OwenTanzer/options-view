@@ -688,11 +688,29 @@ class OIViewer(tk.Tk):
         self.canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.canvas.mpl_connect("scroll_event", self._on_scroll)
 
+        self._loading_label = tk.Label(
+            self.canvas.get_tk_widget(),
+            bg=PANEL, fg=FG,
+            font=("Segoe UI", 13),
+            padx=24, pady=14,
+        )
+
     # ── event handlers ─────────────────────────────────────────────────────────
 
     def _on_select(self):
         sel = self.cal.selection_get()
         self.show_date(sel if isinstance(sel, date) else sel.date())
+
+    _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def _set_loading(self, frame_idx: int):
+        n    = len(SCROLL_POSITIONS)
+        spin = self._SPINNER[frame_idx % len(self._SPINNER)]
+        self._loading_label.config(
+            text=f"{spin}  Rendering data...  {frame_idx} / {n}"
+        )
+        self._loading_label.place(relx=0.5, rely=0.5, anchor="center")
+        self.update_idletasks()
 
     def _prerender_all(self, d: date, df: pd.DataFrame, exp_str: str, tier: str) -> dict:
         offscreen = plt.Figure(figsize=(12, 9.5), facecolor=BG, dpi=72)
@@ -713,23 +731,32 @@ class OIViewer(tk.Tk):
             frames[offset] = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4).copy()
             label = "render" if i == 0 else "update"
             _log.debug(f"[{label:6s}] offset {offset:+3d}: artists={t1-t0:.2f}s  draw={t2-t1:.2f}s")
+            self._set_loading(i + 1)
         _log.debug(f"[total ]  {len(frames)} frames: {time.perf_counter() - t_total:.2f}s")
         return frames
 
     def show_date(self, d: date):
+        self._loading_label.config(text="⠋  Fetching data...")
+        self._loading_label.place(relx=0.5, rely=0.5, anchor="center")
+        self.update_idletasks()
+
         df = load_day(d)
         if df is None:
+            self._loading_label.place_forget()
             return
         label_map = dict(target_expirations(d))
         exp_date  = label_map.get("+1D")
         if exp_date is None:
+            self._loading_label.place_forget()
             return
         exp_str = exp_date.isoformat()
         tier = classify_tier(d)
         self._cur = {"d": d, "df": df, "exp_str": exp_str, "tier": tier}
         self.scroll_offset = 0
         self.scroll_scale.set(0)
+        self._set_loading(0)
         self._prerendered = self._prerender_all(d, df, exp_str, tier)
+        self._loading_label.place_forget()
         self._rerender()
 
         sub5 = df[df["Expiration"] == exp_str]
