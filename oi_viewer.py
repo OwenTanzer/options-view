@@ -13,6 +13,8 @@ Usage:
 
 import calendar as _cal
 import io
+import logging
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -27,6 +29,7 @@ import matplotlib.colors as mcolors
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 import tkinter as tk
 from tkcalendar import Calendar as TkCalendar
@@ -41,10 +44,26 @@ import sys as _sys
 ROOT = Path(_sys._MEIPASS) if getattr(_sys, "frozen", False) else Path(__file__).parent
 R2_BASE = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev"
 
+# ── timing log ─────────────────────────────────────────────────────────────────
+
+_log_path = Path(__file__).parent / "oi_viewer_timing.log"
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s  %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(_log_path, mode="w", encoding="utf-8"),
+    ],
+)
+_log = logging.getLogger("timing")
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
+
 # ── display config ─────────────────────────────────────────────────────────────
 
-DISPLAY_WINDOW = 20   # ±N strikes shown in heatmap
-SCROLL_MAX     = 33 - DISPLAY_WINDOW   # max scroll offset (data covers ±33)
+DISPLAY_WINDOW   = 20   # ±N strikes shown in heatmap
+SCROLL_MAX       = 33 - DISPLAY_WINDOW   # max scroll offset (data covers ±33)
+N_SCROLL_STEPS   = 5
+SCROLL_POSITIONS = [int(round(v)) for v in np.linspace(-SCROLL_MAX, SCROLL_MAX, N_SCROLL_STEPS)]
 
 # 6-level discrete palette
 # Level 0 = zero OI (background), levels 1-5 = increasing intensity
@@ -132,9 +151,13 @@ def available_dates() -> set[date]:
 def load_day(d: date) -> pd.DataFrame | None:
     fname = f"qqq_chain_{d.strftime('%Y%m%d')}.csv"
     for key in [f"raw/{fname}", f"raw/opex/{fname}"]:
+        t0 = time.perf_counter()
         resp = requests.get(f"{R2_BASE}/{key}", timeout=15)
+        elapsed = time.perf_counter() - t0
         if resp.status_code == 200:
+            _log.debug(f"[network] fetched {key} in {elapsed:.2f}s")
             return pd.read_csv(io.StringIO(resp.text))
+        _log.debug(f"[network] miss    {key} in {elapsed:.2f}s (HTTP {resp.status_code})")
     return None
 
 
@@ -446,6 +469,109 @@ def render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
     fig.canvas.draw_idle()
 
 
+def _update_render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
+                   exp_str: str, tier: str, ranges: pd.DataFrame,
+                   scroll_offset: int = 0):
+    """Update an already-rendered figure in place for a new scroll offset.
+    Skips fig.clear() and layout — only swaps data that actually changes between frames."""
+    sub = df[df["Expiration"] == exp_str]
+    if sub.empty:
+        return
+
+    spot = sub["UnderlyingPrice"].iloc[0]
+
+    _s = sub.copy()
+    _s["_oi"] = pd.to_numeric(_s["OpenInterest"], errors="coerce").fillna(0)
+    top5_rank_call: dict[int, int] = {}
+    top5_rank_put:  dict[int, int] = {}
+    for _rank, (_, _r) in enumerate(_s.nlargest(5, "_oi").iterrows(), 1):
+        _sk = int(round(float(_r["Strike"])))
+        if str(_r["Type"]).lower() == "call":
+            top5_rank_call.setdefault(_sk, _rank)
+        else:
+            top5_rank_put.setdefault(_sk, _rank)
+
+    strikes = np.sort(sub["Strike"].unique())
+    atm     = min(strikes, key=lambda s: abs(s - spot))
+
+    top     = DISPLAY_WINDOW + scroll_offset
+    bot     = -DISPLAY_WINDOW + scroll_offset
+    offsets = list(range(top, bot - 1, -1))
+    atm_row = offsets.index(0) if 0 in offsets else None
+
+    thresh    = effective_thresholds(tier, ranges, offsets)
+    call_buck, put_buck = [], []
+    call_oi,  put_oi   = [], []
+    abs_strikes = []
+
+    for o in offsets:
+        sk = atm + o
+        abs_strikes.append(f"{sk:.0f}")
+        c = sub[(sub["Strike"] == sk) & (sub["Type"] == "call")]
+        p = sub[(sub["Strike"] == sk) & (sub["Type"] == "put")]
+        coi = int(c["OpenInterest"].sum()) if not c.empty else 0
+        poi = int(p["OpenInterest"].sum()) if not p.empty else 0
+        call_oi.append(coi)
+        put_oi.append(poi)
+        t = thresh[o]
+        call_buck.append(oi_bucket(coi, t["call"]))
+        put_buck.append(oi_bucket(poi, t["put"]))
+
+    c_arr = np.array(call_buck).reshape(-1, 1)
+    p_arr = np.array(put_buck).reshape(-1, 1)
+
+    ax_c, ax_lbl, ax_p = fig.axes[:3]
+
+    ax_c.images[0].set_data(c_arr)
+    ax_p.images[0].set_data(p_arr)
+
+    ax_c.set_yticklabels(
+        ["ATM" if o == 0 else f"{o:+d}" for o in offsets],
+        fontsize=6.5, color=DIM,
+    )
+
+    for ax, oi_vals, rank_map, arr in (
+        (ax_c, call_oi, top5_rank_call, c_arr),
+        (ax_p, put_oi,  top5_rank_put,  p_arr),
+    ):
+        for txt in ax.texts[:]:
+            txt.remove()
+        for patch in ax.patches[:]:
+            patch.remove()
+
+        for i, oi in enumerate(oi_vals):
+            sk_int = int(round(float(atm + offsets[i])))
+            badge  = rank_map.get(sk_int)
+            if oi == 0 and not badge:
+                continue
+            b = arr[i, 0]
+            txt_col = "#ffffff" if b >= 3 else ("#aaaaaa" if b == 2 else DIM)
+            if oi > 0:
+                ax.text(0, i, fmt_oi(oi),
+                        ha="center", va="center",
+                        fontsize=7, color=txt_col, fontweight="bold")
+            if badge:
+                ax.text(0.44, i, f"#{badge}",
+                        ha="right", va="center",
+                        fontsize=5.5, color="#000000", fontweight="bold")
+
+        if atm_row is not None:
+            ax.axhspan(atm_row - 0.5, atm_row + 0.5,
+                       color="#ffffff", alpha=0.06, zorder=0)
+
+    for txt in ax_lbl.texts[:]:
+        txt.remove()
+    for i, (sk_str, o) in enumerate(zip(abs_strikes, offsets)):
+        is_atm = (o == 0)
+        ax_lbl.text(
+            0.5, i, sk_str,
+            ha="center", va="center",
+            fontsize=7,
+            color="#ffffff" if is_atm else FG,
+            fontweight="bold" if is_atm else "normal",
+        )
+
+
 # ── application ────────────────────────────────────────────────────────────────
 
 class OIViewer(tk.Tk):
@@ -550,6 +676,14 @@ class OIViewer(tk.Tk):
         self.scroll_scale.pack(side=tk.RIGHT, fill=tk.Y, padx=(3, 0))
 
         self.fig = plt.Figure(figsize=(12, 9.5), facecolor=BG)
+        _ax = self.fig.add_axes([0, 0, 1, 1])
+        _ax.set_facecolor(BG)
+        _ax.set_axis_off()
+        self._display_img = _ax.imshow(
+            np.zeros((950, 1200, 4), dtype=np.uint8),
+            aspect="auto", interpolation="antialiased",
+        )
+        self._display_ax = _ax
         self.canvas = FigureCanvasTkAgg(self.fig, master=right)
         self.canvas.get_tk_widget().pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.canvas.mpl_connect("scroll_event", self._on_scroll)
@@ -560,6 +694,28 @@ class OIViewer(tk.Tk):
         sel = self.cal.selection_get()
         self.show_date(sel if isinstance(sel, date) else sel.date())
 
+    def _prerender_all(self, d: date, df: pd.DataFrame, exp_str: str, tier: str) -> dict:
+        offscreen = plt.Figure(figsize=(12, 9.5), facecolor=BG, dpi=72)
+        FigureCanvasAgg(offscreen)
+        frames = {}
+        t_total = time.perf_counter()
+        for i, offset in enumerate(SCROLL_POSITIONS):
+            t0 = time.perf_counter()
+            if i == 0:
+                render(offscreen, d, df, exp_str, tier, self.ranges, scroll_offset=offset)
+            else:
+                _update_render(offscreen, d, df, exp_str, tier, self.ranges, scroll_offset=offset)
+            t1 = time.perf_counter()
+            offscreen.canvas.draw()
+            t2 = time.perf_counter()
+            buf = offscreen.canvas.buffer_rgba()
+            w, h = offscreen.canvas.get_width_height()
+            frames[offset] = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4).copy()
+            label = "render" if i == 0 else "update"
+            _log.debug(f"[{label:6s}] offset {offset:+3d}: artists={t1-t0:.2f}s  draw={t2-t1:.2f}s")
+        _log.debug(f"[total ]  {len(frames)} frames: {time.perf_counter() - t_total:.2f}s")
+        return frames
+
     def show_date(self, d: date):
         df = load_day(d)
         if df is None:
@@ -569,10 +725,11 @@ class OIViewer(tk.Tk):
         if exp_date is None:
             return
         exp_str = exp_date.isoformat()
-        self._cur = {"d": d, "df": df, "exp_str": exp_str,
-                     "tier": classify_tier(d)}
+        tier = classify_tier(d)
+        self._cur = {"d": d, "df": df, "exp_str": exp_str, "tier": tier}
         self.scroll_offset = 0
         self.scroll_scale.set(0)
+        self._prerendered = self._prerender_all(d, df, exp_str, tier)
         self._rerender()
 
         sub5 = df[df["Expiration"] == exp_str]
@@ -585,24 +742,29 @@ class OIViewer(tk.Tk):
             self.canvas_top5.draw()
 
     def _rerender(self):
-        if not self._cur:
+        if not self._cur or not hasattr(self, "_prerendered"):
             return
-        c = self._cur
-        render(self.fig, c["d"], c["df"], c["exp_str"], c["tier"],
-               self.ranges, scroll_offset=self.scroll_offset)
-        self.canvas.draw()
+        arr = self._prerendered.get(self.scroll_offset)
+        if arr is None:
+            return
+        self._display_img.set_data(arr)
+        self.canvas.draw_idle()
 
     def _on_scroll(self, event):
         if not self._cur:
             return
         delta = 1 if event.button == "up" else -1
-        self.scroll_offset = max(-SCROLL_MAX, min(SCROLL_MAX,
-                                                   self.scroll_offset + delta))
-        self.scroll_scale.set(self.scroll_offset)
-        self._rerender()
+        idx = SCROLL_POSITIONS.index(self.scroll_offset)
+        new_idx = max(0, min(len(SCROLL_POSITIONS) - 1, idx + delta))
+        new_offset = SCROLL_POSITIONS[new_idx]
+        if new_offset != self.scroll_offset:
+            self.scroll_offset = new_offset
+            self.scroll_scale.set(new_offset)
+            self._rerender()
 
     def _on_scale(self, value):
-        new_offset = int(round(float(value)))
+        raw = int(round(float(value)))
+        new_offset = min(SCROLL_POSITIONS, key=lambda p: abs(p - raw))
         if new_offset != self.scroll_offset:
             self.scroll_offset = new_offset
             self._rerender()
