@@ -8,9 +8,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -24,35 +23,87 @@ jobs:
       - name: Build OptionsView.exe
         run: python build.py
 
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist/OptionsView.exe
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pyinstaller Pillow pandas numpy matplotlib requests tkcalendar pandas_market_calendars
+
+      - name: Build OptionsView.app
+        run: pyinstaller --clean OptionsView-mac.spec
+
+      - name: Zip app bundle
+        run: cd dist && zip -r OptionsView-mac.zip OptionsView.app
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-build
+          path: dist/OptionsView-mac.zip
+
+  release:
+    needs: [build-windows, build-mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: dist
+
+      - name: Download Mac build
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-build
+          path: dist
+
       - name: Publish release
-        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cat > notes.md << 'NOTES'
           ## Download Options View
 
-          **Click `OptionsView.exe` in the Assets section below to download.**
+          **Choose your platform below.**
 
-          No installer. No Python. No setup. Just download and run.
+          No installer. No Python. No setup.
 
           ---
 
-          ### How to run it (Windows)
+          ### Windows
 
-          1. Click **OptionsView.exe** in the Assets section below and save it anywhere — your Desktop is fine
-          2. Double-click **OptionsView.exe**
-          3. If Windows shows **"Windows protected your PC"** — click **More info**, then **Run anyway**
-             > This warning appears for all apps that aren't signed with a paid code certificate.
-             > It is safe to dismiss.
-          4. The app opens — green dates on the calendar have data. Click one, then **View Date**.
+          1. Click **OptionsView.exe** in the Assets section below
+          2. Double-click to run
+          3. If Windows shows **"Windows protected your PC"** → click **More info**, then **Run anyway**
+             > This appears for all apps without a paid code certificate. Safe to dismiss.
+
+          ### macOS
+
+          1. Click **OptionsView-mac.zip** in the Assets section below
+          2. Unzip it — you'll get **OptionsView.app**
+          3. Drag it to your Applications folder (optional)
+          4. First launch: right-click → **Open** → **Open** again to bypass Gatekeeper
 
           ---
           *Auto-built from the latest commit on `master`.*
           NOTES
 
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest dist/OptionsView.exe \
+          gh release create latest dist/OptionsView.exe dist/OptionsView-mac.zip \
             --title "Options View — Latest" \
             --notes-file notes.md \
             --latest \

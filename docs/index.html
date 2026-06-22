@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Options View — Download</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d1117;
+      color: #c9d1d9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.4rem;
+      color: #f0f6fc;
+    }
+
+    .subtitle {
+      color: #6e7681;
+      font-size: 0.95rem;
+      margin-bottom: 3rem;
+    }
+
+    .cards {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 2rem 2.5rem;
+      width: 260px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+      text-align: center;
+    }
+
+    .card-icon {
+      font-size: 2.8rem;
+      line-height: 1;
+    }
+
+    .card h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: #f0f6fc;
+    }
+
+    .card p {
+      font-size: 0.82rem;
+      color: #6e7681;
+      line-height: 1.5;
+    }
+
+    .btn {
+      display: inline-block;
+      margin-top: 0.5rem;
+      padding: 0.6rem 1.4rem;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+
+    .btn-windows {
+      background: #238636;
+      color: #fff;
+    }
+
+    .btn-mac {
+      background: #1f6feb;
+      color: #fff;
+    }
+
+    .note {
+      margin-top: 2.5rem;
+      font-size: 0.78rem;
+      color: #6e7681;
+      text-align: center;
+      max-width: 480px;
+      line-height: 1.6;
+    }
+
+    .note a {
+      color: #58a6ff;
+      text-decoration: none;
+    }
+    .note a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+  <h1>Options View</h1>
+  <p class="subtitle">0DTE QQQ open interest heatmap — no installer, no Python</p>
+
+  <div class="cards">
+
+    <div class="card">
+      <div class="card-icon">🪟</div>
+      <h2>Windows</h2>
+      <p>Download and double-click.<br>If prompted, click <strong>More info → Run anyway</strong>.</p>
+      <a class="btn btn-windows"
+         href="https://github.com/OwenTanzer/options-view/releases/download/latest/OptionsView.exe">
+        Download .exe
+      </a>
+    </div>
+
+    <div class="card">
+      <div class="card-icon">🍎</div>
+      <h2>macOS</h2>
+      <p>Unzip, then drag <strong>OptionsView.app</strong> to your Applications folder.</p>
+      <a class="btn btn-mac"
+         href="https://github.com/OwenTanzer/options-view/releases/download/latest/OptionsView-mac.zip">
+        Download .zip
+      </a>
+    </div>
+
+  </div>
+
+  <p class="note">
+    No account needed. Built automatically from the latest code.<br>
+    Questions or issues? <a href="https://github.com/OwenTanzer/options-view/issues">Open an issue on GitHub</a>.
+  </p>
+
+</body>
+</html>
