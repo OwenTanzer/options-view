@@ -37,7 +37,8 @@ import tkinter as tk
 from tkcalendar import Calendar as TkCalendar
 
 from utils import (
-    _ensure_calendar_loaded, nominal_friday, prior_trading_day, target_expirations,
+    _ensure_calendar_loaded, next_trading_day, nominal_friday, prior_trading_day,
+    target_expirations,
 )
 
 # ── paths and remote data ──────────────────────────────────────────────────────
@@ -262,10 +263,15 @@ def fmt_oi(v: int) -> str:
     return f"{v//1000}K"
 
 
-def render_intraday(ax: plt.Axes, df: pd.DataFrame | None, exp_date: date):
+def render_intraday(ax: plt.Axes, df: pd.DataFrame | None, exp_date: date | None):
     ax.set_facecolor(BG)
     for spine in ax.spines.values():
         spine.set_edgecolor(BORDER)
+
+    if exp_date is None:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        return
 
     if df is None or df.empty:
         ax.text(0.5, 0.5, "no data", ha="center", va="center",
@@ -702,15 +708,24 @@ class OIViewer(tk.Tk):
             except Exception:
                 pass
 
-        self.avail         = available_dates()
+        capture_dates      = available_dates()
         self.ranges        = load_ranges()
         self.scroll_offset = 0
         self._cur: dict    = {}
 
-        sorted_dates = sorted(self.avail)
-        lo, hi = sorted_dates[0], sorted_dates[-1]
-        _bootstrap(lo - timedelta(days=5), hi + timedelta(days=60))
+        sorted_captures = sorted(capture_dates)
+        _bootstrap(sorted_captures[0] - timedelta(days=5),
+                   sorted_captures[-1] + timedelta(days=60))
 
+        # Key structural choice: the UI is indexed by expiry date, not capture date.
+        # Each chain is keyed by the date the session traded, not the date it was captured.
+        self._expiry_capture: dict[date, date] = {
+            next_trading_day(c): c for c in capture_dates
+        }
+        self.avail = set(self._expiry_capture.keys())
+
+        sorted_expiries = sorted(self.avail)
+        lo, hi = sorted_expiries[0], sorted_expiries[-1]
         self._build(lo, hi)
         self.after(100, lambda: self.show_date(hi))
 
@@ -853,26 +868,26 @@ class OIViewer(tk.Tk):
         return frames
 
     def show_date(self, d: date):
+        """d is the expiry date (session date). Load the chain captured the prior day."""
         self._loading_label.config(text="⠋  Fetching data...")
         self._loading_label.place(relx=0.5, rely=0.5, anchor="center")
         self.update_idletasks()
 
-        df = load_day(d)
+        capture = self._expiry_capture.get(d)
+        if capture is None:
+            self._loading_label.place_forget()
+            return
+        df = load_day(capture)
         if df is None:
             self._loading_label.place_forget()
             return
-        label_map = dict(target_expirations(d))
-        exp_date  = label_map.get("+1D")
-        if exp_date is None:
-            self._loading_label.place_forget()
-            return
-        exp_str = exp_date.isoformat()
-        tier = classify_tier(d)
-        self._cur = {"d": d, "df": df, "exp_str": exp_str, "tier": tier}
+        exp_str = d.isoformat()
+        tier = classify_tier(capture)
+        self._cur = {"d": capture, "df": df, "exp_str": exp_str, "tier": tier}
         self.scroll_offset = 0
         self.scroll_scale.set(0)
         self._set_loading(0)
-        self._prerendered = self._prerender_all(d, df, exp_str, tier)
+        self._prerendered = self._prerender_all(capture, df, exp_str, tier)
         self._loading_label.place_forget()
         self._rerender()
 
@@ -885,12 +900,13 @@ class OIViewer(tk.Tk):
             render_top5(ax5, df, exp_str, spot5, compact=True)
             self.canvas_top5.draw()
 
-        intraday_target = exp_date if exp_date <= date.today() else d
-        intraday_df = load_intraday(intraday_target)
+        # Intraday: show price series for the expiry date; blank panel if it's still in the future.
+        intraday_df = load_intraday(d) if d <= date.today() else None
+        exp_date_for_panel = d if d <= date.today() else None
         self.fig_price.clear()
         self.fig_price.subplots_adjust(left=0.04, right=0.80, top=0.88, bottom=0.22)
         ax_id = self.fig_price.add_subplot(111)
-        render_intraday(ax_id, intraday_df, intraday_target)
+        render_intraday(ax_id, intraday_df, exp_date_for_panel)
         self.canvas_price.draw()
 
     def _rerender(self):
