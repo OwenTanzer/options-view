@@ -179,7 +179,9 @@ def load_intraday(exp_date: date) -> pd.DataFrame | None:
     if resp.status_code == 200:
         return pd.read_csv(io.StringIO(resp.text))
 
-    # yfinance fallback
+    # yfinance fallback — only for dates that have already traded
+    if exp_date > date.today():
+        return None
     try:
         for interval in ("5m", "2m"):
             df = yf.download(
