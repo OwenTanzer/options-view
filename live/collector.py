@@ -51,10 +51,26 @@ TASTY_BASE     = "https://api.tastyworks.com"
 TICKER         = "QQQ"
 STRIKE_WINDOW  = 33
 SNAPSHOT_SECS  = 11 * 60
-PREMARKET_HOUR = 6       # start collecting at 6:00 AM ET (pre-market validation)
-STOP_HOUR      = 16      # stop at 4:15 PM ET
+PRICES_SECS    = 30          # how often to push prices.json
+PREMARKET_HOUR = 6           # start at 6:00 AM ET
+STOP_HOUR      = 16
 STOP_MIN       = 15
 R2_BUCKET      = os.environ.get("R2_BUCKET_NAME", "pub-4d5c916b8cb74ffb8c0abd7dfadb02cf")
+
+# Display label → DXLink symbol
+# VIX index is $VIX.X in dxfeed; BTC/USD via Coinbase on tastytrade
+PRICE_TICKERS: dict[str, str] = {
+    "QQQ":    "QQQ",
+    "USO":    "USO",
+    "VIX":    "$VIX.X",
+    "SMH":    "SMH",
+    "IGV":    "IGV",
+    "BTC/USD": "BTC/USD:CXERX",
+    "META":   "META",
+    "GOOGL":  "GOOGL",
+    "AMZN":   "AMZN",
+    "TSLA":   "TSLA",
+}
 
 
 # ── tastytrade auth ────────────────────────────────────────────────────────────
@@ -181,11 +197,17 @@ class DXLinkFeed:
 
     # ── public API ─────────────────────────────────────────────────────────────
 
-    def set_subscriptions(self, symbols: list[str]):
-        """Set symbols to subscribe to (Quote, Summary, Trade, Greeks)."""
+    def set_subscriptions(self, option_symbols: list[str], price_symbols: list[str]):
+        """
+        option_symbols: full options chain — Quote, Summary, Trade, Greeks
+        price_symbols:  equity/index tickers — Quote, Trade, Summary (for prev close)
+        """
         self._subs = []
-        for sym in symbols:
+        for sym in option_symbols:
             for event_type in ("Quote", "Summary", "Trade", "Greeks"):
+                self._subs.append({"type": event_type, "symbol": sym})
+        for sym in price_symbols:
+            for event_type in ("Quote", "Trade", "Summary"):
                 self._subs.append({"type": event_type, "symbol": sym})
 
     def get_state(self) -> dict[str, dict]:
@@ -260,7 +282,7 @@ class DXLinkFeed:
                 "acceptDataFormat": "FULL",
                 "acceptEventFields": {
                     "Quote":   ["eventSymbol", "bidPrice", "askPrice"],
-                    "Summary": ["eventSymbol", "openInterest"],
+                    "Summary": ["eventSymbol", "openInterest", "prevDayClosePrice", "dayOpenPrice"],
                     "Trade":   ["eventSymbol", "dayVolume", "price"],
                     "Greeks":  ["eventSymbol", "volatility", "delta", "gamma", "theta", "vega"],
                 },
@@ -302,6 +324,10 @@ class DXLinkFeed:
                 elif et == "Summary":
                     if event.get("openInterest") is not None:
                         s["oi"] = int(event["openInterest"])
+                    if event.get("prevDayClosePrice") is not None:
+                        s["prev_close"] = event["prevDayClosePrice"]
+                    if event.get("dayOpenPrice") is not None:
+                        s["day_open"] = event["dayOpenPrice"]
                 elif et == "Trade":
                     if event.get("dayVolume") is not None:
                         s["volume"] = int(event["dayVolume"])
@@ -369,6 +395,58 @@ def classify_tier(today: date) -> str:
                 opex = prior_td(date(plus1d.year, plus1d.month, day))
                 break
     return "0DTE_Monthly" if plus1d == opex else "0DTE_Weekly"
+
+
+# ── prices.json upload (every 30s) ────────────────────────────────────────────
+
+def push_prices(s3, feed: DXLinkFeed):
+    state = feed.get_state()
+    ts_et  = datetime.now(ET)
+    ts_utc = datetime.now(timezone.utc)
+
+    prices = {}
+    for label, dxlink_sym in PRICE_TICKERS.items():
+        d = state.get(dxlink_sym, {})
+        bid  = d.get("bid")
+        ask  = d.get("ask")
+        last = d.get("last")
+        mid  = round((bid + ask) / 2, 4) if bid is not None and ask is not None else None
+        price = last or mid
+        prev  = d.get("prev_close")
+        chg_pct = None
+        if price and prev and prev != 0:
+            chg_pct = round((price - prev) / prev * 100, 2)
+        prices[label] = {
+            "price":    price,
+            "bid":      bid,
+            "ask":      ask,
+            "prev_close": prev,
+            "chg_pct":  chg_pct,
+            "volume":   d.get("volume"),
+        }
+
+    payload = json.dumps({
+        "timestamp":     ts_utc.isoformat(),
+        "snapshot_time": ts_et.strftime("%H:%M ET"),
+        "prices":        prices,
+    }, default=str)
+
+    s3.put_object(
+        Bucket=R2_BUCKET, Key="intraday/prices.json",
+        Body=payload.encode(),
+        ContentType="application/json",
+        CacheControl="no-cache, max-age=0",
+    )
+
+
+def prices_loop(s3, feed: DXLinkFeed):
+    while not past_stop():
+        try:
+            push_prices(s3, feed)
+        except Exception as e:
+            log.error(f"prices.json error: {e}")
+        time.sleep(PRICES_SECS)
+    log.info("prices loop stopped")
 
 
 # ── snapshot upload ────────────────────────────────────────────────────────────
@@ -508,15 +586,16 @@ def main():
 
     strikes, exp_date = load_chain(auth["session_token"], today)
 
-    all_syms = [TICKER]
+    option_syms = []
     for s in strikes:
-        all_syms.append(s["call_sym"])
-        all_syms.append(s["put_sym"])
+        option_syms.append(s["call_sym"])
+        option_syms.append(s["put_sym"])
 
-    log.info(f"subscribing to {len(all_syms)} symbols")
+    price_syms = list(PRICE_TICKERS.values())
+    log.info(f"subscribing to {len(option_syms)} option symbols + {len(price_syms)} price tickers")
 
     feed = DXLinkFeed(auth["streamer_url"], auth["streamer_token"])
-    feed.set_subscriptions(all_syms)
+    feed.set_subscriptions(option_syms, price_syms)
     feed.start()
 
     if not feed.wait_ready(timeout=30):
@@ -526,6 +605,11 @@ def main():
     time.sleep(20)
 
     s3 = make_s3()
+
+    # Start prices.json refresh thread (every 30s)
+    prices_thread = threading.Thread(target=prices_loop, args=(s3, feed), daemon=True)
+    prices_thread.start()
+    log.info(f"prices thread started (every {PRICES_SECS}s)")
 
     log.info(f"snapshot loop started (every {SNAPSHOT_SECS // 60}m, stop {STOP_HOUR:02d}:{STOP_MIN:02d} ET)")
 

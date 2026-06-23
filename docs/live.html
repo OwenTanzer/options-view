@@ -161,6 +161,74 @@
     border: 1px solid rgba(255,255,255,0.08);
   }
 
+  /* ── price strip ─────────────────────────────────────────────────────── */
+  #price-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 1rem;
+  }
+  .price-group {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .price-group + .price-group::before {
+    content: '';
+    width: 1px;
+    height: 28px;
+    background: var(--border);
+    align-self: center;
+  }
+  .ticker-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    min-width: 68px;
+    cursor: default;
+    transition: border-color 0.2s;
+  }
+  .ticker-btn.sm {
+    min-width: 58px;
+    padding: 3px 7px;
+  }
+  .ticker-btn .sym {
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: var(--dim);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1;
+    margin-bottom: 2px;
+  }
+  .ticker-btn .px {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--bright);
+    line-height: 1;
+  }
+  .ticker-btn.sm .px { font-size: 0.78rem; }
+  .ticker-btn .chg {
+    font-size: 0.6rem;
+    font-weight: 600;
+    line-height: 1;
+    margin-top: 1px;
+  }
+  .chg.up   { color: #00cc55; }
+  .chg.down { color: #ee3300; }
+  .chg.flat { color: var(--dim); }
+
+  /* flash animation on price update */
+  @keyframes flash-up   { 0%,100%{background:var(--panel)} 30%{background:#003318} }
+  @keyframes flash-down { 0%,100%{background:var(--panel)} 30%{background:#330808} }
+  .flash-up   { animation: flash-up   0.6s ease; }
+  .flash-down { animation: flash-down 0.6s ease; }
+
   /* ── no-data state ───────────────────────────────────────────────────── */
   #no-data {
     padding: 3rem;
@@ -194,6 +262,15 @@
   <span id="status-dot"></span>
   <span id="status-text">Loading…</span>
   <span id="countdown"></span>
+</div>
+
+<div id="price-strip">
+  <div class="price-group" id="px-main">
+    <!-- QQQ USO VIX SMH IGV — large -->
+  </div>
+  <div class="price-group" id="px-secondary">
+    <!-- BTC/USD META GOOGL AMZN TSLA — small -->
+  </div>
 </div>
 
 <div id="legend">
@@ -448,13 +525,93 @@ function startCountdown() {
   }, 1000);
 }
 
+// ── price strip ───────────────────────────────────────────────────────────────
+
+const MAIN_TICKERS = ['QQQ', 'USO', 'VIX', 'SMH', 'IGV'];
+const SMALL_TICKERS = ['BTC/USD', 'META', 'GOOGL', 'AMZN', 'TSLA'];
+let prevPrices = {};
+
+function fmtPrice(v, sym) {
+  if (v == null) return '—';
+  if (sym === 'BTC/USD') return v > 1000 ? v.toLocaleString('en-US', {maximumFractionDigits: 0}) : v.toFixed(2);
+  if (sym === 'VIX') return v.toFixed(2);
+  return v.toFixed(2);
+}
+
+function buildTickerEl(sym, isSmall) {
+  const el = document.createElement('div');
+  el.className = 'ticker-btn' + (isSmall ? ' sm' : '');
+  el.id = `tk-${sym.replace('/', '-')}`;
+  el.innerHTML = `<span class="sym">${sym}</span><span class="px">—</span><span class="chg flat"></span>`;
+  return el;
+}
+
+function initPriceStrip() {
+  const main = document.getElementById('px-main');
+  const sec  = document.getElementById('px-secondary');
+  MAIN_TICKERS.forEach(s  => main.appendChild(buildTickerEl(s, false)));
+  SMALL_TICKERS.forEach(s => sec.appendChild(buildTickerEl(s, true)));
+}
+
+function updatePriceStrip(pricesData) {
+  const all = [...MAIN_TICKERS, ...SMALL_TICKERS];
+  for (const sym of all) {
+    const d   = pricesData[sym];
+    const el  = document.getElementById(`tk-${sym.replace('/', '-')}`);
+    if (!el || !d) continue;
+
+    const px = d.price;
+    const pxEl  = el.querySelector('.px');
+    const chgEl = el.querySelector('.chg');
+
+    const prev = prevPrices[sym];
+    if (px != null && prev != null && px !== prev) {
+      el.classList.remove('flash-up', 'flash-down');
+      void el.offsetWidth; // reflow to restart animation
+      el.classList.add(px > prev ? 'flash-up' : 'flash-down');
+    }
+    prevPrices[sym] = px;
+
+    pxEl.textContent = fmtPrice(px, sym);
+
+    const chg = d.chg_pct;
+    if (chg != null) {
+      const sign = chg >= 0 ? '+' : '';
+      chgEl.textContent = `${sign}${chg.toFixed(2)}%`;
+      chgEl.className = `chg ${chg > 0 ? 'up' : chg < 0 ? 'down' : 'flat'}`;
+    } else {
+      chgEl.textContent = '';
+      chgEl.className = 'chg flat';
+    }
+  }
+}
+
+async function fetchPrices() {
+  try {
+    const resp = await fetch(`${R2}/intraday/prices.json?_=${Date.now()}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    updatePriceStrip(data.prices || {});
+  } catch (e) {
+    console.warn('prices.json fetch failed:', e);
+  }
+}
+
 // ── boot ──────────────────────────────────────────────────────────────────────
 (async function boot() {
+  initPriceStrip();
+
   setStatus('', 'Loading calibration data…');
   await loadRanges();
+
   setStatus('', 'Fetching live snapshot…');
-  await fetchLatest();
+  await Promise.all([fetchLatest(), fetchPrices()]);
+
+  // OI heatmap: 60s refresh cycle
   startCountdown();
+
+  // Price strip: 30s independent interval
+  setInterval(fetchPrices, 30_000);
 })();
 </script>
 </body>
