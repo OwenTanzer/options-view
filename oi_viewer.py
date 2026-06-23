@@ -885,11 +885,12 @@ class OIViewer(tk.Tk):
             render_top5(ax5, df, exp_str, spot5, compact=True)
             self.canvas_top5.draw()
 
-        intraday_df = load_intraday(exp_date)
+        intraday_target = exp_date if exp_date <= date.today() else d
+        intraday_df = load_intraday(intraday_target)
         self.fig_price.clear()
         self.fig_price.subplots_adjust(left=0.04, right=0.80, top=0.88, bottom=0.22)
         ax_id = self.fig_price.add_subplot(111)
-        render_intraday(ax_id, intraday_df, exp_date)
+        render_intraday(ax_id, intraday_df, intraday_target)
         self.canvas_price.draw()
 
     def _rerender(self):
