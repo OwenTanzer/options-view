@@ -21,7 +21,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pandas_market_calendars as mcal
+import pytz
 import requests
+import yfinance as yf
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -43,6 +45,7 @@ from utils import (
 import sys as _sys
 ROOT = Path(_sys._MEIPASS) if getattr(_sys, "frozen", False) else Path(__file__).parent
 R2_BASE = "https://pub-4d5c916b8cb74ffb8c0abd7dfadb02cf.r2.dev"
+_ET     = pytz.timezone("America/New_York")
 
 # ── timing log ─────────────────────────────────────────────────────────────────
 
@@ -167,6 +170,52 @@ def load_ranges() -> pd.DataFrame:
     return pd.read_csv(io.StringIO(resp.text))
 
 
+def load_intraday(exp_date: date) -> pd.DataFrame | None:
+    """Try R2 first, fall back to yfinance for 10-min (or 5-min) QQQ bars on exp_date."""
+    fname = f"qqq_intraday_{exp_date.strftime('%Y%m%d')}.csv"
+    t0 = time.perf_counter()
+    resp = requests.get(f"{R2_BASE}/prices/{fname}", timeout=15)
+    _log.debug(f"[network] prices/{fname}: HTTP {resp.status_code} in {time.perf_counter()-t0:.2f}s")
+    if resp.status_code == 200:
+        return pd.read_csv(io.StringIO(resp.text))
+
+    # yfinance fallback
+    try:
+        for interval in ("5m", "2m"):
+            df = yf.download(
+                "QQQ",
+                start=exp_date.isoformat(),
+                end=(exp_date + timedelta(days=1)).isoformat(),
+                interval=interval,
+                auto_adjust=True,
+                progress=False,
+            )
+            if not df.empty:
+                break
+        else:
+            return None
+
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [c[0] for c in df.columns]
+        if df.index.tz is None:
+            df.index = df.index.tz_localize("UTC")
+        df.index = df.index.tz_convert(_ET)
+        df = df.between_time("09:30", "15:59")
+        if df.empty:
+            return None
+
+        df = df.reset_index()
+        df.columns = [str(c).lower() for c in df.columns]
+        dt_col = next((c for c in df.columns if "datetime" in c), None)
+        if dt_col and dt_col != "datetime":
+            df = df.rename(columns={dt_col: "datetime"})
+        df["datetime"] = df["datetime"].astype(str)
+        return df[["datetime", "open", "high", "low", "close", "volume"]]
+    except Exception as e:
+        _log.debug(f"yfinance intraday fallback failed for {exp_date}: {e}")
+        return None
+
+
 def effective_thresholds(tier: str, ranges: pd.DataFrame, offsets: list[int]) -> dict:
     """
     {offset: {"call": [p25,p50,p75,p90], "put": [p25,p50,p75,p90]}}
@@ -209,6 +258,67 @@ def fmt_oi(v: int) -> str:
     if v < 1000:  return str(v)
     if v < 10000: return f"{v/1000:.1f}K"
     return f"{v//1000}K"
+
+
+def render_intraday(ax: plt.Axes, df: pd.DataFrame | None, exp_date: date):
+    ax.set_facecolor(BG)
+    for spine in ax.spines.values():
+        spine.set_edgecolor(BORDER)
+
+    if df is None or df.empty:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                color=DIM, transform=ax.transAxes, fontsize=8)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title(str(exp_date), color=DIM, fontsize=7, pad=3)
+        return
+
+    opens  = pd.to_numeric(df["open"],  errors="coerce").values
+    highs  = pd.to_numeric(df["high"],  errors="coerce").values
+    lows   = pd.to_numeric(df["low"],   errors="coerce").values
+    closes = pd.to_numeric(df["close"], errors="coerce").values
+
+    n  = len(df)
+    xs = np.arange(n)
+    up = closes >= opens
+
+    ax.vlines(xs[ up],  lows[ up],  highs[ up],  color="#00cc55", linewidth=0.6, zorder=2)
+    ax.vlines(xs[~up],  lows[~up],  highs[~up],  color="#ee3300", linewidth=0.6, zorder=2)
+
+    for i in xs:
+        o, c = opens[i], closes[i]
+        ax.add_patch(mpatches.Rectangle(
+            (i - 0.35, min(o, c)), 0.7, max(abs(c - o), 0.01),
+            color=("#00cc55" if c >= o else "#ee3300"), zorder=3,
+        ))
+
+    price_lo, price_hi = np.nanmin(lows), np.nanmax(highs)
+    pad = (price_hi - price_lo) * 0.06 or 0.5
+    ax.set_xlim(-0.5, n - 0.5)
+    ax.set_ylim(price_lo - pad, price_hi + pad)
+
+    # x-axis: three evenly-spaced time labels
+    if "datetime" in df.columns and n > 0:
+        def _hhmm(s):
+            try:
+                t = pd.Timestamp(str(s))
+                return f"{t.hour}:{t.minute:02d}"
+            except Exception:
+                return ""
+        ticks = [0, n // 2, n - 1]
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([_hhmm(df["datetime"].iloc[i]) for i in ticks],
+                           fontsize=5.5, color=DIM)
+    else:
+        ax.set_xticks([])
+    ax.tick_params(axis="x", colors=DIM, length=2, pad=2)
+
+    ax.yaxis.tick_right()
+    ax.yaxis.set_tick_params(labelsize=5.5, colors=DIM, pad=1, length=2)
+    ax.yaxis.set_major_locator(plt.MaxNLocator(3, integer=False))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.0f}"))
+
+    ax.set_title(str(exp_date), color=DIM, fontsize=7, pad=3)
 
 
 # ── rendering ──────────────────────────────────────────────────────────────────
@@ -438,7 +548,7 @@ def render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
     tier_short = tier.replace("0DTE_", "")
     tier_col   = TIER_COLORS.get(tier, FG)
     fig.text(0.5, 0.957,
-             f"QQQ 0DTE  ·  {trade_date}  ·  ${spot:.2f}",
+             f"QQQ 0DTE  ·  exp {exp_str}  ·  captured {trade_date}  ·  ${spot:.2f}",
              ha="center", color=FG, fontsize=13, fontweight="bold")
     fig.text(0.5, 0.938,
              f"[ {tier_short} ]",
@@ -657,6 +767,11 @@ class OIViewer(tk.Tk):
         self.canvas_top5 = FigureCanvasTkAgg(self.fig_top5, master=left)
         self.canvas_top5.get_tk_widget().pack(fill=tk.X, pady=(6, 0))
 
+        self.fig_price = plt.Figure(figsize=(2.0, 1.6), facecolor=BG)
+        self.fig_price.subplots_adjust(left=0.04, right=0.80, top=0.88, bottom=0.22)
+        self.canvas_price = FigureCanvasTkAgg(self.fig_price, master=left)
+        self.canvas_price.get_tk_widget().pack(fill=tk.X, pady=(4, 0))
+
         right = tk.Frame(self, bg=BG)
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
                    pady=10, padx=(4, 10))
@@ -767,6 +882,13 @@ class OIViewer(tk.Tk):
             ax5 = self.fig_top5.add_subplot(111)
             render_top5(ax5, df, exp_str, spot5, compact=True)
             self.canvas_top5.draw()
+
+        intraday_df = load_intraday(exp_date)
+        self.fig_price.clear()
+        self.fig_price.subplots_adjust(left=0.04, right=0.80, top=0.88, bottom=0.22)
+        ax_id = self.fig_price.add_subplot(111)
+        render_intraday(ax_id, intraday_df, exp_date)
+        self.canvas_price.draw()
 
     def _rerender(self):
         if not self._cur or not hasattr(self, "_prerendered"):
