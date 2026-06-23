@@ -398,6 +398,31 @@ def classify_tier(today: date) -> str:
     return "0DTE_Monthly" if plus1d == opex else "0DTE_Weekly"
 
 
+# ── ticker health diagnostics ──────────────────────────────────────────────────
+
+def _log_ticker_health(feed: DXLinkFeed):
+    """Log OK/WARN for every price ticker after the initial data flush."""
+    state = feed.get_state()
+    dead = []
+    log.info("── price ticker health check ──────────────────────────────")
+    for label, dxlink_sym in PRICE_TICKERS.items():
+        d     = state.get(dxlink_sym, {})
+        price = d.get("last") or (
+            round((d["bid"] + d["ask"]) / 2, 4)
+            if d.get("bid") is not None and d.get("ask") is not None else None
+        )
+        if price is not None:
+            log.info(f"  OK    {label:<10} ({dxlink_sym})  price={price}")
+        else:
+            log.warning(f"  WARN  {label:<10} ({dxlink_sym})  NO DATA — symbol may be wrong or not subscribed")
+            dead.append(label)
+    if dead:
+        log.warning(f"  {len(dead)} ticker(s) with no data: {', '.join(dead)}")
+    else:
+        log.info("  all price tickers returning data")
+    log.info("───────────────────────────────────────────────────────────")
+
+
 # ── prices.json upload (every 30s) ────────────────────────────────────────────
 
 def push_prices(s3, feed: DXLinkFeed):
@@ -425,6 +450,10 @@ def push_prices(s3, feed: DXLinkFeed):
             "chg_pct":  chg_pct,
             "volume":   d.get("volume"),
         }
+
+    dead = [label for label, d in prices.items() if d["price"] is None]
+    if dead:
+        log.warning(f"prices.json — no data for: {', '.join(dead)}")
 
     payload = json.dumps({
         "timestamp":     ts_utc.isoformat(),
@@ -594,6 +623,8 @@ def main():
 
     price_syms = list(PRICE_TICKERS.values())
     log.info(f"subscribing to {len(option_syms)} option symbols + {len(price_syms)} price tickers")
+    for label, sym in PRICE_TICKERS.items():
+        log.info(f"  price ticker  {label:<10} → {sym}")
 
     feed = DXLinkFeed(auth["streamer_url"], auth["streamer_token"])
     feed.set_subscriptions(option_syms, price_syms)
@@ -604,6 +635,8 @@ def main():
 
     log.info("waiting 20s for initial data flush...")
     time.sleep(20)
+
+    _log_ticker_health(feed)
 
     s3 = make_s3()
 
