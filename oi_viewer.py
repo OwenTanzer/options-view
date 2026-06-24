@@ -332,12 +332,9 @@ def render_daily_context(ax: plt.Axes, df: pd.DataFrame | None, exp_date: date |
     ax.set_xlim(-0.6, n - 0.4)
     ax.set_ylim(price_lo - pad, price_hi + pad)
 
-    labels = [f"{pd.Timestamp(v).month}/{pd.Timestamp(v).day}" for v in df[date_col]]
-    ax.set_xticks(xs)
-    ax.set_xticklabels(labels, fontsize=4.8, color=DIM)
-    ax.tick_params(axis="x", colors=DIM, length=2, pad=1)
+    ax.set_xticks([])
     ax.set_yticks([])
-    ax.set_title("Daily", color=DIM, fontsize=6, pad=2)
+    ax.set_title("Daily", color=DIM, fontsize=8, pad=2)
 
 
 def render_intraday(ax: plt.Axes, df: pd.DataFrame | None, exp_date: date | None):
@@ -856,15 +853,13 @@ class OIViewer(tk.Tk):
             cursor="hand2",
         ).pack(fill=tk.X, pady=(0, 6))
 
-        self.fig_top5 = plt.Figure(figsize=(3.0, 2.0), facecolor=BG)
-        self.fig_top5.subplots_adjust(left=0.06, right=0.96, top=0.94, bottom=0.24)
-        self.canvas_top5 = FigureCanvasTkAgg(self.fig_top5, master=left)
-        self.canvas_top5.get_tk_widget().pack(fill=tk.X, pady=(6, 0))
-
-        self.fig_price = plt.Figure(figsize=(3.0, 1.8), facecolor=BG)
-        self.fig_price.subplots_adjust(left=0.04, right=0.80, top=0.88, bottom=0.22)
+        self.fig_price = plt.Figure(figsize=(3.0, 2.0), facecolor=BG)
         self.canvas_price = FigureCanvasTkAgg(self.fig_price, master=left)
-        self.canvas_price.get_tk_widget().pack(fill=tk.X, pady=(4, 0))
+        self.canvas_price.get_tk_widget().pack(fill=tk.X, pady=(6, 0))
+
+        self.fig_top5 = plt.Figure(figsize=(3.0, 1.8), facecolor=BG)
+        self.canvas_top5 = FigureCanvasTkAgg(self.fig_top5, master=left)
+        self.canvas_top5.get_tk_widget().pack(fill=tk.X, pady=(4, 0))
 
         right = tk.Frame(self, bg=BG)
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
@@ -969,29 +964,33 @@ class OIViewer(tk.Tk):
         self._rerender()
 
         sub5 = df[df["Expiration"] == exp_str]
-        if not sub5.empty:
-            spot5 = sub5["UnderlyingPrice"].iloc[0]
-            self.fig_top5.clear()
-            self.fig_top5.subplots_adjust(left=0.06, right=0.96, top=0.94, bottom=0.24)
-            ax5 = self.fig_top5.add_subplot(111)
-            render_top5(ax5, df, exp_str, spot5, compact=True)
-            self.canvas_top5.draw()
+        spot5 = sub5["UnderlyingPrice"].iloc[0] if not sub5.empty else None
 
         # Price panel: intraday 5-min bars (left) + daily context candles (right).
         # Both keyed on the expiry date; blank if the expiry is still in the future.
         exp_date_for_panel = d if d <= date.today() else None
         intraday_df = load_intraday(d) if exp_date_for_panel is not None else None
         daily_df    = load_daily_window(d) if exp_date_for_panel is not None else None
+
+        # Top widget: intraday price only
         self.fig_price.clear()
-        gs = self.fig_price.add_gridspec(
-            1, 2, width_ratios=[7, 3],
-            left=0.04, right=0.97, top=0.88, bottom=0.22, wspace=0.38,
-        )
-        ax_id    = self.fig_price.add_subplot(gs[0])
-        ax_daily = self.fig_price.add_subplot(gs[1])
+        ax_id = self.fig_price.add_subplot(111)
+        self.fig_price.subplots_adjust(left=0.06, right=0.97, top=0.88, bottom=0.22)
         render_intraday(ax_id, intraday_df, exp_date_for_panel)
-        render_daily_context(ax_daily, daily_df, exp_date_for_panel)
         self.canvas_price.draw()
+
+        # Bottom widget: top-5 strikes (left) + daily candles (right)
+        self.fig_top5.clear()
+        gs5 = self.fig_top5.add_gridspec(
+            1, 2, width_ratios=[7, 3],
+            left=0.06, right=0.97, top=0.88, bottom=0.24, wspace=0.38,
+        )
+        ax5     = self.fig_top5.add_subplot(gs5[0])
+        ax_daily = self.fig_top5.add_subplot(gs5[1])
+        if spot5 is not None:
+            render_top5(ax5, df, exp_str, spot5, compact=True)
+        render_daily_context(ax_daily, daily_df, exp_date_for_panel)
+        self.canvas_top5.draw()
 
     def _rerender(self):
         if not self._cur or not hasattr(self, "_prerendered"):
