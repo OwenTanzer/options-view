@@ -890,7 +890,8 @@ class OIViewer(tk.Tk):
         self._build(lo, hi)
         self.after(100, lambda: self.show_date(hi))
 
-        self._sim_index = SimilarityIndex()
+        self._sim_index  = SimilarityIndex()
+        self._daily_moves: dict[str, float] = {}
         threading.Thread(target=self._run_bootstrap, daemon=True).start()
 
     # ── UI construction ────────────────────────────────────────────────────────
@@ -955,11 +956,13 @@ class OIViewer(tk.Tk):
         sim_frame = tk.Frame(left, bg=PANEL, highlightthickness=1,
                              highlightbackground=BORDER)
         sim_frame.pack(fill=tk.X, pady=(4, 0))
-        tk.Label(sim_frame, text="Similar Sessions", bg=PANEL, fg=FG,
-                 font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=6, pady=(4, 0))
-        self._sim_status = tk.Label(sim_frame, text="Building index…", bg=PANEL,
+        _hdr = tk.Frame(sim_frame, bg=PANEL)
+        _hdr.pack(fill=tk.X, padx=6, pady=(4, 2))
+        tk.Label(_hdr, text="Similar Sessions", bg=PANEL, fg=FG,
+                 font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
+        self._sim_status = tk.Label(_hdr, text="Building index…", bg=PANEL,
                                     fg=DIM, font=("Segoe UI", 7))
-        self._sim_status.pack(anchor="w", padx=6, pady=(0, 2))
+        self._sim_status.pack(side=tk.RIGHT)
         self._sim_rows = []
         for _ in range(5):
             row = tk.Frame(sim_frame, bg=PANEL)
@@ -969,8 +972,11 @@ class OIViewer(tk.Tk):
             date_lbl.pack(side=tk.LEFT)
             score_lbl = tk.Label(row, text="", bg=PANEL, fg=DIM,
                                  font=("Segoe UI", 7))
-            score_lbl.pack(side=tk.RIGHT)
-            self._sim_rows.append((date_lbl, score_lbl))
+            score_lbl.pack(side=tk.LEFT, padx=(3, 0))
+            move_lbl  = tk.Label(row, text="", bg=PANEL,
+                                 font=("Segoe UI", 8, "bold"))
+            move_lbl.pack(side=tk.RIGHT)
+            self._sim_rows.append((date_lbl, score_lbl, move_lbl))
         tk.Frame(sim_frame, bg=PANEL, height=3).pack()
 
         right = tk.Frame(self, bg=BG)
@@ -1120,7 +1126,34 @@ class OIViewer(tk.Tk):
             )
         n = len(self._sim_index._vecs)
         self.after(0, lambda: self._sim_status.config(text=f"{n} sessions indexed"))
+        self._fetch_daily_moves()
         self.after(0, self._refresh_similar)
+
+    def _fetch_daily_moves(self):
+        expiries = sorted(self._expiry_capture.keys())
+        if not expiries:
+            return
+        try:
+            df = yf.download(
+                "QQQ",
+                start=expiries[0].isoformat(),
+                end=(expiries[-1] + timedelta(days=3)).isoformat(),
+                interval="1d", auto_adjust=True, progress=False,
+            )
+            if df.empty:
+                return
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [c[0] for c in df.columns]
+            df.index = pd.to_datetime(df.index).normalize()
+            for exp_d in expiries:
+                ts = pd.Timestamp(exp_d)
+                if ts in df.index:
+                    o = float(df.loc[ts, "Open"])
+                    c = float(df.loc[ts, "Close"])
+                    if o > 0:
+                        self._daily_moves[exp_d.isoformat()] = (c - o) / o * 100
+        except Exception:
+            pass
 
     def _refresh_similar(self):
         cap = self._cur.get("d") if self._cur else None
@@ -1129,7 +1162,7 @@ class OIViewer(tk.Tk):
             self._update_similar(matches)
 
     def _update_similar(self, matches: list[tuple[date, float]]):
-        for i, (date_lbl, score_lbl) in enumerate(self._sim_rows):
+        for i, (date_lbl, score_lbl, move_lbl) in enumerate(self._sim_rows):
             if i < len(matches):
                 cap_d, score = matches[i]
                 exp_d = next_trading_day(cap_d)
@@ -1138,9 +1171,17 @@ class OIViewer(tk.Tk):
                 date_lbl.config(text=label, fg=col)
                 score_lbl.config(text=f"{score:.3f}")
                 date_lbl.bind("<Button-1>", lambda e, d=exp_d: self.show_date(d))
+                move = self._daily_moves.get(exp_d.isoformat())
+                if move is not None:
+                    sign = "+" if move >= 0 else ""
+                    move_lbl.config(text=f"{sign}{move:.1f}%",
+                                    fg="#00cc55" if move >= 0 else "#ee3300")
+                else:
+                    move_lbl.config(text="")
             else:
                 date_lbl.config(text="—")
                 score_lbl.config(text="")
+                move_lbl.config(text="")
                 date_lbl.unbind("<Button-1>")
 
     def _rerender(self):
