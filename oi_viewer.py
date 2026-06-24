@@ -627,14 +627,14 @@ def render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
         )
     ax_lbl.set_title("Strike", color=DIM, fontsize=9, pad=5)
 
-    tier_short = tier.replace("0DTE_", "")
-    tier_col   = TIER_COLORS.get(tier, FG)
+    from datetime import date as _date
+    _exp_d = _date.fromisoformat(exp_str)
+    _cap_d = _date.fromisoformat(trade_date)
+    _exp_fmt = f"{_exp_d.strftime('%b')} {_exp_d.day}"
+    _cap_fmt = f"{_cap_d.month}/{_cap_d.day}/{_cap_d.year}"
     fig.text(0.5, 0.957,
-             f"QQQ 0DTE  ·  exp {exp_str}  ·  captured {trade_date}  ·  ${spot:.2f}",
-             ha="center", color=FG, fontsize=13, fontweight="bold")
-    fig.text(0.5, 0.938,
-             f"[ {tier_short} ]",
-             ha="center", color=tier_col, fontsize=10, fontweight="bold")
+             f"QQQ Options Chain Expiring {_exp_fmt}, as Captured at 7 PM on {_cap_fmt} (Spot ${spot:.2f})",
+             ha="center", color=FG, fontsize=11, fontweight="bold")
 
     level_labels = ["< p25", "p25–p50", "p50–p75", "p75–p90", "> p90"]
     c_patches = [mpatches.Patch(facecolor=CALL_COLORS[i+1], edgecolor=BORDER,
