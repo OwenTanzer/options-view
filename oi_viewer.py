@@ -73,17 +73,17 @@ SCROLL_POSITIONS = [int(round(v)) for v in np.linspace(-SCROLL_MAX, SCROLL_MAX, 
 # Level 0 = zero OI (background), levels 1-5 = increasing intensity
 CALL_COLORS = [
     "#0d1117",   # 0  zero OI
-    "#0a1f14",   # 1  < p25
-    "#0a3020",   # 2  p25–p50
-    "#007730",   # 3  p50–p75
+    "#0f3d22",   # 1  < p25
+    "#1a6635",   # 2  p25–p50
+    "#008c38",   # 3  p50–p75
     "#00cc55",   # 4  p75–p90
     "#88ffcc",   # 5  > p90  ("wall")
 ]
 PUT_COLORS = [
     "#0d1117",   # 0  zero OI
-    "#1a0d0d",   # 1  < p25
-    "#2a0a0a",   # 2  p25–p50
-    "#881100",   # 3  p50–p75
+    "#400d0d",   # 1  < p25
+    "#6b1515",   # 2  p25–p50
+    "#a01800",   # 3  p50–p75
     "#ee3300",   # 4  p75–p90
     "#ffaa88",   # 5  > p90  ("wall")
 ]
