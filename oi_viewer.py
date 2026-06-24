@@ -627,11 +627,9 @@ def render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
         )
     ax_lbl.set_title("Strike", color=DIM, fontsize=9, pad=5)
 
-    from datetime import date as _date
-    _exp_d = _date.fromisoformat(exp_str)
-    _cap_d = _date.fromisoformat(trade_date)
+    _exp_d  = date.fromisoformat(exp_str)
     _exp_fmt = f"{_exp_d.strftime('%b')} {_exp_d.day}"
-    _cap_fmt = f"{_cap_d.month}/{_cap_d.day}/{_cap_d.year}"
+    _cap_fmt = f"{trade_date.month}/{trade_date.day}/{trade_date.year}"
     fig.text(0.5, 0.957,
              f"QQQ Options Chain Expiring {_exp_fmt}, as Captured at 7 PM on {_cap_fmt} (Spot ${spot:.2f})",
              ha="center", color=FG, fontsize=11, fontweight="bold")
