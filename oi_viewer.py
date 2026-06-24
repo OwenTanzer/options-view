@@ -653,19 +653,14 @@ def render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
         framealpha=1.0, handlelength=2.0, handleheight=1.1,
         handletextpad=0.5, columnspacing=0.8,
     )
-    leg_c = fig.legend(
-        handles=c_patches, title="CALLS", title_fontsize=9,
+    fig.legend(
+        handles=c_patches,
         loc="lower left", bbox_to_anchor=(0.03, 0.01), **_leg_kw,
     )
-    leg_c.get_title().set_color("#00cc55")
-    leg_c.get_title().set_fontweight("bold")
-
-    leg_p = fig.legend(
-        handles=p_patches, title="PUTS", title_fontsize=9,
+    fig.legend(
+        handles=p_patches,
         loc="lower right", bbox_to_anchor=(0.97, 0.01), **_leg_kw,
     )
-    leg_p.get_title().set_color("#ee3300")
-    leg_p.get_title().set_fontweight("bold")
 
     fig.canvas.draw_idle()
 
