@@ -1112,17 +1112,21 @@ class OIViewer(tk.Tk):
         caps   = sorted(self._expiry_capture.values())
         total  = len(caps)
         cached = len(self._sim_index._vecs)
-        if cached == total:
-            self.after(0, lambda: self._sim_status.config(
-                text=f"{total} sessions indexed"))
-            return
-        self._sim_index.bootstrap(
-            caps, self.ranges,
-            on_progress=lambda i, t: self.after(0, lambda i=i, t=t:
-                self._sim_status.config(text=f"Indexing {i}/{t}…")),
-        )
+        if cached < total:
+            self._sim_index.bootstrap(
+                caps, self.ranges,
+                on_progress=lambda i, t: self.after(0, lambda i=i, t=t:
+                    self._sim_status.config(text=f"Indexing {i}/{t}…")),
+            )
         n = len(self._sim_index._vecs)
         self.after(0, lambda: self._sim_status.config(text=f"{n} sessions indexed"))
+        self.after(0, self._refresh_similar)
+
+    def _refresh_similar(self):
+        cap = self._cur.get("d") if self._cur else None
+        if cap:
+            matches = self._sim_index.query(cap, n=5)
+            self._update_similar(matches)
 
     def _update_similar(self, matches: list[tuple[date, float]]):
         for i, (date_lbl, score_lbl) in enumerate(self._sim_rows):
