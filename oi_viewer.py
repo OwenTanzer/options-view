@@ -64,7 +64,7 @@ logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
 # ── display config ─────────────────────────────────────────────────────────────
 
-DISPLAY_WINDOW   = 20   # ±N strikes shown in heatmap
+DISPLAY_WINDOW   = 11   # ±N strikes shown in heatmap
 SCROLL_MAX       = 33 - DISPLAY_WINDOW   # max scroll offset (data covers ±33)
 N_SCROLL_STEPS   = 5
 SCROLL_POSITIONS = [int(round(v)) for v in np.linspace(-SCROLL_MAX, SCROLL_MAX, N_SCROLL_STEPS)]
@@ -591,11 +591,11 @@ def render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
             if oi > 0:
                 ax.text(0, i, fmt_oi(oi),
                         ha="center", va="center",
-                        fontsize=7, color=txt_col, fontweight="bold")
+                        fontsize=10, color=txt_col, fontweight="bold")
             if badge:
                 ax.text(0.44, i, f"#{badge}",
                         ha="right", va="center",
-                        fontsize=5.5, color="#000000", fontweight="bold")
+                        fontsize=8, color="#000000", fontweight="bold")
 
         if atm_row is not None:
             ax.axhspan(atm_row - 0.5, atm_row + 0.5,
@@ -604,13 +604,13 @@ def render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
     ax_c.set_yticks(range(n))
     ax_c.set_yticklabels(
         ["ATM" if o == 0 else f"{o:+d}" for o in offsets],
-        fontsize=6.5, color=DIM,
+        fontsize=9, color=DIM,
     )
     ax_c.yaxis.set_tick_params(length=0, pad=2)
-    ax_c.set_title("CALLS", color="#00cc55", fontsize=11, fontweight="bold", pad=5)
+    ax_c.set_title("CALLS", color="#00cc55", fontsize=13, fontweight="bold", pad=5)
 
     ax_p.set_yticks([])
-    ax_p.set_title("PUTS", color="#ee3300", fontsize=11, fontweight="bold", pad=5)
+    ax_p.set_title("PUTS", color="#ee3300", fontsize=13, fontweight="bold", pad=5)
 
     ax_lbl.set_facecolor(BG)
     ax_lbl.set_xlim(0, 1)
@@ -624,11 +624,11 @@ def render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
         ax_lbl.text(
             0.5, i, sk_str,
             ha="center", va="center",
-            fontsize=7,
+            fontsize=10,
             color="#ffffff" if is_atm else FG,
             fontweight="bold" if is_atm else "normal",
         )
-    ax_lbl.set_title("Strike", color=DIM, fontsize=8, pad=5)
+    ax_lbl.set_title("Strike", color=DIM, fontsize=9, pad=5)
 
     tier_short = tier.replace("0DTE_", "")
     tier_col   = TIER_COLORS.get(tier, FG)
@@ -650,7 +650,7 @@ def render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
         handles=c_patches + [spacer] + p_patches,
         loc="lower center",
         ncol=11,
-        fontsize=7.5,
+        fontsize=8,
         facecolor=PANEL,
         edgecolor=BORDER,
         labelcolor=FG,
@@ -722,7 +722,7 @@ def _update_render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
 
     ax_c.set_yticklabels(
         ["ATM" if o == 0 else f"{o:+d}" for o in offsets],
-        fontsize=6.5, color=DIM,
+        fontsize=9, color=DIM,
     )
 
     for ax, oi_vals, rank_map, arr in (
@@ -744,11 +744,11 @@ def _update_render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
             if oi > 0:
                 ax.text(0, i, fmt_oi(oi),
                         ha="center", va="center",
-                        fontsize=7, color=txt_col, fontweight="bold")
+                        fontsize=10, color=txt_col, fontweight="bold")
             if badge:
                 ax.text(0.44, i, f"#{badge}",
                         ha="right", va="center",
-                        fontsize=5.5, color="#000000", fontweight="bold")
+                        fontsize=8, color="#000000", fontweight="bold")
 
         if atm_row is not None:
             ax.axhspan(atm_row - 0.5, atm_row + 0.5,
@@ -761,7 +761,7 @@ def _update_render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
         ax_lbl.text(
             0.5, i, sk_str,
             ha="center", va="center",
-            fontsize=7,
+            fontsize=10,
             color="#ffffff" if is_atm else FG,
             fontweight="bold" if is_atm else "normal",
         )
@@ -809,7 +809,7 @@ class OIViewer(tk.Tk):
     # ── UI construction ────────────────────────────────────────────────────────
 
     def _build(self, lo: date, hi: date):
-        left = tk.Frame(self, bg=BG, width=210)
+        left = tk.Frame(self, bg=BG, width=310)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 4), pady=10)
         left.pack_propagate(False)
 
@@ -856,12 +856,12 @@ class OIViewer(tk.Tk):
             cursor="hand2",
         ).pack(fill=tk.X, pady=(0, 6))
 
-        self.fig_top5 = plt.Figure(figsize=(2.0, 1.8), facecolor=BG)
+        self.fig_top5 = plt.Figure(figsize=(3.0, 2.0), facecolor=BG)
         self.fig_top5.subplots_adjust(left=0.06, right=0.96, top=0.94, bottom=0.24)
         self.canvas_top5 = FigureCanvasTkAgg(self.fig_top5, master=left)
         self.canvas_top5.get_tk_widget().pack(fill=tk.X, pady=(6, 0))
 
-        self.fig_price = plt.Figure(figsize=(2.0, 1.6), facecolor=BG)
+        self.fig_price = plt.Figure(figsize=(3.0, 1.8), facecolor=BG)
         self.fig_price.subplots_adjust(left=0.04, right=0.80, top=0.88, bottom=0.22)
         self.canvas_price = FigureCanvasTkAgg(self.fig_price, master=left)
         self.canvas_price.get_tk_widget().pack(fill=tk.X, pady=(4, 0))
@@ -984,7 +984,7 @@ class OIViewer(tk.Tk):
         daily_df    = load_daily_window(d) if exp_date_for_panel is not None else None
         self.fig_price.clear()
         gs = self.fig_price.add_gridspec(
-            1, 2, width_ratios=[3, 2],
+            1, 2, width_ratios=[7, 3],
             left=0.04, right=0.97, top=0.88, bottom=0.22, wspace=0.38,
         )
         ax_id    = self.fig_price.add_subplot(gs[0])
