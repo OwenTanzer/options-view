@@ -1205,12 +1205,7 @@ class OIViewer(tk.Tk):
                         f"{sign}{row['pct']:.1f}%")
                 ylim = ax_daily.get_ylim()
                 tip_y = ylim[0] + (ylim[1] - ylim[0]) * 0.55
-                # Use display-space position to decide anchor direction
-                ax_bbox  = ax_daily.get_window_extent()
-                disp_x   = ax_daily.transData.transform([[xi, 0]])[0][0]
-                frac     = (disp_x - ax_bbox.x0) / ax_bbox.width if ax_bbox.width else 0.5
-                ha = "right" if frac > 0.5 else "left"
-                self._daily_tip.set_horizontalalignment(ha)
+                self._daily_tip.set_horizontalalignment("left")
                 self._daily_tip.set_text(text)
                 self._daily_tip.set_position((xi, tip_y))
                 self._daily_tip.get_bbox_patch().set_edgecolor(pct_col)
@@ -1317,13 +1312,12 @@ class OIViewer(tk.Tk):
                 color=DIM, fontsize=8, transform=ax.transAxes)
         self._sim_popup_canvas.draw()
 
-        # Show at initial position, then re-clamp once Tk knows the real size
+        # Fixed position: right of sidebar, anchored to the top of the window
         sx = self.winfo_rootx() + 322
-        sy = event.widget.winfo_rooty() - 30
+        sy = self.winfo_rooty() + 10
         self._sim_popup.geometry(f"+{sx}+{sy}")
         self._sim_popup.deiconify()
         self._sim_popup.lift()
-        self.after(1, self._clamp_sim_popup)
 
         # Fetch intraday data in background
         key = exp_d.isoformat()
@@ -1362,20 +1356,6 @@ class OIViewer(tk.Tk):
         self._sim_hide_job = None
         self._sim_popup_target = None
         self._sim_popup.withdraw()
-
-    def _clamp_sim_popup(self):
-        if not self._sim_popup.winfo_ismapped():
-            return
-        pw = self._sim_popup.winfo_width()
-        ph = self._sim_popup.winfo_height()
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        x  = self._sim_popup.winfo_x()
-        y  = self._sim_popup.winfo_y()
-        nx = max(10, min(x, sw - pw - 10))
-        ny = max(10, min(y, sh - ph - 10))
-        if nx != x or ny != y:
-            self._sim_popup.geometry(f"+{nx}+{ny}")
 
     def _rerender(self):
         if not self._cur or not hasattr(self, "_prerendered"):
