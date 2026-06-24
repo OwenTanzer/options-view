@@ -13,7 +13,9 @@ Usage:
 
 import calendar as _cal
 import io
+import json
 import logging
+import threading
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -286,6 +288,87 @@ def load_daily_window(exp_date: date, window: int = 2) -> pd.DataFrame | None:
         return df.iloc[max(0, ci - window): ci + window + 1].reset_index(drop=True)
     except Exception:
         return None
+
+
+# ── similarity index ────────────────────────────────────────────────────────────
+
+def build_feature_vector(df: pd.DataFrame, exp_str: str,
+                         tier: str, ranges: pd.DataFrame) -> "np.ndarray | None":
+    """44-element vector: bucket values for ±11 offsets, calls then puts."""
+    sub = df[df["Expiration"] == exp_str]
+    if sub.empty:
+        return None
+    spot    = float(sub["UnderlyingPrice"].iloc[0])
+    strikes = np.sort(sub["Strike"].unique())
+    atm     = min(strikes, key=lambda s: abs(s - spot))
+    offsets = list(range(DISPLAY_WINDOW, -DISPLAY_WINDOW - 1, -1))
+    thresh  = effective_thresholds(tier, ranges, offsets)
+    call_b, put_b = [], []
+    for o in offsets:
+        sk  = atm + o
+        c   = sub[(sub["Strike"] == sk) & (sub["Type"] == "call")]
+        p   = sub[(sub["Strike"] == sk) & (sub["Type"] == "put")]
+        coi = int(c["OpenInterest"].sum()) if not c.empty else 0
+        poi = int(p["OpenInterest"].sum()) if not p.empty else 0
+        t   = thresh[o]
+        call_b.append(oi_bucket(coi, t["call"]))
+        put_b.append(oi_bucket(poi, t["put"]))
+    return np.array(call_b + put_b, dtype=float)
+
+
+class SimilarityIndex:
+    CACHE_PATH = ROOT / "similarity_cache.json"
+
+    def __init__(self):
+        self._vecs: dict[str, list[float]] = {}
+        if self.CACHE_PATH.exists():
+            try:
+                self._vecs = json.loads(self.CACHE_PATH.read_text())
+            except Exception:
+                pass
+
+    def bootstrap(self, capture_dates: list[date], ranges: pd.DataFrame,
+                  on_progress=None) -> int:
+        new = 0
+        for i, cap in enumerate(capture_dates):
+            key = cap.isoformat()
+            if key not in self._vecs:
+                df = load_day(cap)
+                if df is not None:
+                    exp_str = next_trading_day(cap).isoformat()
+                    tier    = classify_tier(cap)
+                    vec     = build_feature_vector(df, exp_str, tier, ranges)
+                    if vec is not None:
+                        self._vecs[key] = vec.tolist()
+                        new += 1
+            if on_progress:
+                on_progress(i + 1, len(capture_dates))
+        if new:
+            try:
+                self.CACHE_PATH.write_text(json.dumps(self._vecs))
+            except Exception:
+                pass
+        return new
+
+    def query(self, capture_date: date, n: int = 5) -> list[tuple[date, float]]:
+        key = capture_date.isoformat()
+        if key not in self._vecs:
+            return []
+        target = np.array(self._vecs[key])
+        norm_t = np.linalg.norm(target)
+        if norm_t == 0:
+            return []
+        results = []
+        for k, v_list in self._vecs.items():
+            if k == key:
+                continue
+            v    = np.array(v_list)
+            norm = np.linalg.norm(v)
+            if norm == 0:
+                continue
+            score = float(np.dot(target, v) / (norm_t * norm))
+            results.append((date.fromisoformat(k), score))
+        return sorted(results, key=lambda x: -x[1])[:n]
 
 
 def render_daily_context(ax: plt.Axes, df: pd.DataFrame | None, exp_date: date | None):
@@ -807,6 +890,9 @@ class OIViewer(tk.Tk):
         self._build(lo, hi)
         self.after(100, lambda: self.show_date(hi))
 
+        self._sim_index = SimilarityIndex()
+        threading.Thread(target=self._run_bootstrap, daemon=True).start()
+
     # ── UI construction ────────────────────────────────────────────────────────
 
     def _build(self, lo: date, hi: date):
@@ -864,6 +950,28 @@ class OIViewer(tk.Tk):
         self.fig_top5 = plt.Figure(figsize=(3.0, 1.8), facecolor=BG)
         self.canvas_top5 = FigureCanvasTkAgg(self.fig_top5, master=left)
         self.canvas_top5.get_tk_widget().pack(fill=tk.X, pady=(4, 0))
+
+        # Similarity panel
+        sim_frame = tk.Frame(left, bg=PANEL, highlightthickness=1,
+                             highlightbackground=BORDER)
+        sim_frame.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(sim_frame, text="Similar Sessions", bg=PANEL, fg=FG,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=6, pady=(5, 1))
+        self._sim_status = tk.Label(sim_frame, text="Building index…", bg=PANEL,
+                                    fg=DIM, font=("Segoe UI", 7))
+        self._sim_status.pack(anchor="w", padx=6, pady=(0, 3))
+        self._sim_rows = []
+        for _ in range(5):
+            row = tk.Frame(sim_frame, bg=PANEL)
+            row.pack(fill=tk.X, padx=6, pady=1)
+            date_lbl  = tk.Label(row, text="", bg=PANEL, fg="#4dff9a",
+                                 font=("Segoe UI", 8, "bold"), cursor="hand2")
+            date_lbl.pack(side=tk.LEFT)
+            score_lbl = tk.Label(row, text="", bg=PANEL, fg=DIM,
+                                 font=("Segoe UI", 7))
+            score_lbl.pack(side=tk.RIGHT)
+            self._sim_rows.append((date_lbl, score_lbl))
+        tk.Frame(sim_frame, bg=PANEL, height=4).pack()
 
         right = tk.Frame(self, bg=BG)
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
@@ -967,6 +1075,10 @@ class OIViewer(tk.Tk):
         self._loading_label.place_forget()
         self._rerender()
 
+        if hasattr(self, "_sim_index"):
+            matches = self._sim_index.query(capture, n=5)
+            self._update_similar(matches)
+
         sub5 = df[df["Expiration"] == exp_str]
         spot5 = sub5["UnderlyingPrice"].iloc[0] if not sub5.empty else None
 
@@ -995,6 +1107,37 @@ class OIViewer(tk.Tk):
             render_top5(ax5, df, exp_str, spot5, compact=True)
         render_daily_context(ax_daily, daily_df, exp_date_for_panel)
         self.canvas_top5.draw()
+
+    def _run_bootstrap(self):
+        caps   = sorted(self._expiry_capture.values())
+        total  = len(caps)
+        cached = len(self._sim_index._vecs)
+        if cached == total:
+            self.after(0, lambda: self._sim_status.config(
+                text=f"{total} sessions indexed"))
+            return
+        self._sim_index.bootstrap(
+            caps, self.ranges,
+            on_progress=lambda i, t: self.after(0, lambda i=i, t=t:
+                self._sim_status.config(text=f"Indexing {i}/{t}…")),
+        )
+        n = len(self._sim_index._vecs)
+        self.after(0, lambda: self._sim_status.config(text=f"{n} sessions indexed"))
+
+    def _update_similar(self, matches: list[tuple[date, float]]):
+        for i, (date_lbl, score_lbl) in enumerate(self._sim_rows):
+            if i < len(matches):
+                cap_d, score = matches[i]
+                exp_d = next_trading_day(cap_d)
+                label = f"{exp_d.strftime('%b')} {exp_d.day}"
+                col   = TIER_COLORS.get(classify_tier(cap_d), "#4dff9a")
+                date_lbl.config(text=label, fg=col)
+                score_lbl.config(text=f"{score:.3f}")
+                date_lbl.bind("<Button-1>", lambda e, d=exp_d: self.show_date(d))
+            else:
+                date_lbl.config(text="—")
+                score_lbl.config(text="")
+                date_lbl.unbind("<Button-1>")
 
     def _rerender(self):
         if not self._cur or not hasattr(self, "_prerendered"):
