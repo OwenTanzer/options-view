@@ -630,9 +630,17 @@ def render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
     _exp_d  = date.fromisoformat(exp_str)
     _exp_fmt = f"{_exp_d.strftime('%b')} {_exp_d.day}"
     _cap_fmt = f"{trade_date.month}/{trade_date.day}/{trade_date.year}"
-    fig.text(0.5, 0.957,
+    _tier_labels = {
+        "0DTE_Regular": "Regular Trading Day",
+        "0DTE_Weekly":  "Weekly Expiration",
+        "0DTE_Monthly": "Monthly Expiration",
+    }
+    fig.text(0.5, 0.962,
              f"QQQ Options Chain Expiring {_exp_fmt}, as Captured at 7 PM on {_cap_fmt} (Spot ${spot:.2f})",
-             ha="center", color=FG, fontsize=11, fontweight="bold")
+             ha="center", color=FG, fontsize=13, fontweight="bold")
+    fig.text(0.5, 0.940,
+             f"[ {_tier_labels.get(tier, tier)} ]",
+             ha="center", color=TIER_COLORS.get(tier, FG), fontsize=10, fontweight="bold")
 
     level_labels = ["< p25", "p25–p50", "p50–p75", "p75–p90", "> p90"]
     c_patches = [mpatches.Patch(facecolor=CALL_COLORS[i+1], edgecolor=BORDER,
