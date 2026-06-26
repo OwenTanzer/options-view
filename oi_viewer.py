@@ -146,6 +146,24 @@ def classify_tier(trade_date: date) -> str:
     return "0DTE_Monthly" if p1d == opex else "0DTE_Weekly"
 
 
+def classify_expiry(d: date) -> str:
+    """Classify expiry date d directly (D-date scheme).
+
+    Asks 'is d itself a Weekly/Monthly/Regular expiry?' rather than
+    'is d's next day a weekly?' — the distinction matters because
+    prior_trading_day(Friday) = Thursday, which would shift every tier
+    assignment by one day.
+    """
+    nf = nominal_friday(d)
+    eow = nf
+    while eow not in _valid:   # roll back only if the Friday is a holiday
+        eow -= timedelta(days=1)
+    if d != eow:
+        return "0DTE_Regular"
+    opex = _monthly_opex(d.year, d.month)
+    return "0DTE_Monthly" if d == opex else "0DTE_Weekly"
+
+
 # ── data helpers ───────────────────────────────────────────────────────────────
 
 def available_dates() -> set[date]:
@@ -336,7 +354,7 @@ class SimilarityIndex:
                 df = load_day(cap)
                 if df is not None:
                     exp_str = cap.isoformat()
-                    tier    = classify_tier(prior_trading_day(cap))
+                    tier    = classify_expiry(cap)
                     vec     = build_feature_vector(df, exp_str, tier, ranges)
                     if vec is not None:
                         self._vecs[key] = vec.tolist()
@@ -731,7 +749,7 @@ def render(fig: plt.Figure, trade_date: date, df: pd.DataFrame,
         "0DTE_Monthly": "Monthly Expiration",
     }
     fig.text(0.5, 0.962,
-             f"QQQ Options Exp. {_exp_fmt}  ·  Captured {_cap_fmt} at 4 PM  ·  Spot ${spot:.2f}",
+             f"QQQ Options  ·  Exp. {_exp_fmt}  ·  Spot ${spot:.2f}",
              ha="center", color=FG, fontsize=16, fontweight="bold")
     fig.text(0.5, 0.940,
              f"[ {_tier_labels.get(tier, tier)} ]",
@@ -892,7 +910,7 @@ class OIViewer(tk.Tk):
 
         # Key structural choice: the UI is indexed by expiry date.
         # Chain files are named qqq_chain_{D}.csv where D is the expiry date itself
-        # (captured at 4 PM ET on D — post D-1 OCC settlement, pre-trading noise).
+        # Files are named qqq_chain_{D}.csv; they carry D-1 OCC settlement OI (game board).
         self._expiry_capture: dict[date, date] = {
             c: c for c in capture_dates
         }
@@ -1109,7 +1127,7 @@ class OIViewer(tk.Tk):
             self._loading_label.place_forget()
             return
         exp_str = d.isoformat()
-        tier = classify_tier(prior_trading_day(capture))
+        tier = classify_expiry(capture)
         self._cur = {"d": capture, "df": df, "exp_str": exp_str, "tier": tier}
         self.scroll_offset = 0
         self.scroll_scale.set(0)
@@ -1279,7 +1297,7 @@ class OIViewer(tk.Tk):
                 cap_d, score = matches[i]
                 exp_d = cap_d
                 label = f"{exp_d.strftime('%b')} {exp_d.day}"
-                col   = TIER_COLORS.get(classify_tier(prior_trading_day(cap_d)), "#4dff9a")
+                col   = TIER_COLORS.get(classify_expiry(cap_d), "#4dff9a")
                 date_lbl.config(text=label, fg=col)
                 score_lbl.config(text=f"{score:.3f}")
                 date_lbl.bind("<Button-1>", lambda e, d=exp_d: self.show_date(d))
